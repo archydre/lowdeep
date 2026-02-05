@@ -36,13 +36,15 @@ Simple text-based completion with state validation.
 ```typescript
 import lowdeep from "lowdeep";
 
-const res = await lowdeep()
+const ai = await lowdeep()
   .key(process.env.API_KEY)
   .provider("groq")
   .model("llama3-70b-8192")
-  .chat("What is the capital of Japan?");
+  .temperature(1.5);
 
-console.log(res); // "Tokyo"
+console.log(await ai.chat("What is the biggest country in the world?")); // Russia
+
+// it remembers your chat :)
 ```
 
 ### Structured Output with Self-Healing
