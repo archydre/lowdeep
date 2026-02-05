@@ -49,6 +49,7 @@ export type FinalBuilder<
               ): FinalBuilder<Omit<S, "hasSchema"> & { hasSchema: true }, NewT>;
               retry(num: number): FinalBuilder<S, T>;
               system(prompt: string): FinalBuilder<S, T>;
+              temperature(val: number): FinalBuilder<S, T>;
             }
           : {}
         : {}

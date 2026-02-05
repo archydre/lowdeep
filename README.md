@@ -4,6 +4,8 @@
 
 Lowdeep is a minimalist library designed for developers who are tired of dealing with unpredictable LLM responses. It transforms chaotic text into structured, validated data using a **Self-Healing** mechanism that learns from validation errors in real-time.
 
+[![Sponsor Lowdeep](https://img.shields.io/badge/Sponsor-Lowdeep-ff69b4?style=for-the-badge&logo=github-sponsors)](https://github.com/sponsors/archydre)
+
 ---
 
 ## ✨ Key Features
@@ -18,9 +20,9 @@ Lowdeep is a minimalist library designed for developers who are tired of dealing
 ## 🚀 Installation
 
 ```bash
-bun add lowdeep zod openai
+bun add lowdeep
 # or
-npm install lowdeep zod openai
+npm install lowdeep
 ```
 
 ---
@@ -40,7 +42,7 @@ const res = await lowdeep()
   .model("llama3-70b-8192")
   .chat("What is the capital of Japan?");
 
-console.log(res.content); // "Tokyo"
+console.log(res); // "Tokyo"
 ```
 
 ### Structured Output with Self-Healing
