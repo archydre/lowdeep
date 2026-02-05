@@ -27,7 +27,7 @@ export default function lowdeep() {
       _key = val;
       return instance;
     },
-    provider(val: string) {
+    provider(val: Provider) {
       _provider = val;
       return instance;
     },
