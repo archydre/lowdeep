@@ -17,7 +17,6 @@ export default function lowdeep() {
   let _temperature: number = 0.7;
   let _history: ChatCompletionMessageParam[] = [];
 
-  // Objeto base com todas as funções
   const instance = {
     use(history: ChatCompletionMessageParam[]) {
       _history = history;

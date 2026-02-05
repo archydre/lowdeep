@@ -1,6 +1,6 @@
 {
   "name": "lowdeep",
-  "version": "1.1.0",
+  "version": "1.1.5",
   "description": "The fluent, resilient, and 100% Type-Safe AI SDK with Self-Healing logic.",
   "keywords": [
     "ai",

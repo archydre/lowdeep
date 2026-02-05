@@ -1,7 +1,6 @@
 import type { ZodType } from "zod";
 import type z from "zod";
 
-// Esse helper é o segredo. Ele "achata" os tipos para o VS Code ler com facilidade.
 type Compute<T> = { [K in keyof T]: T[K] } & {};
 
 type State = {
@@ -11,12 +10,10 @@ type State = {
   hasSchema: boolean;
 };
 
-// Agora o FinalBuilder calcula TUDO o que deve aparecer baseado no estado S
 export type FinalBuilder<
   S extends State,
   T extends z.ZodType = z.ZodAny,
 > = Compute<
-  // 1. Métodos de Configuração (só aparecem se forem false)
   (S["hasKey"] extends false
     ? {
         key(val: string): FinalBuilder<Omit<S, "hasKey"> & { hasKey: true }, T>;
@@ -36,7 +33,6 @@ export type FinalBuilder<
           ): FinalBuilder<Omit<S, "hasModel"> & { hasModel: true }, T>;
         }
       : {}) &
-    // 2. Métodos de Ação (só aparecem se os 3 principais forem true)
     (S["hasKey"] extends true
       ? S["hasProvider"] extends true
         ? S["hasModel"] extends true
