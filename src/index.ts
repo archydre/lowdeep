@@ -65,10 +65,6 @@ export default function lowdeep() {
         content: message,
       });
 
-      console.log(
-        `history so far(after user's message): ${JSON.stringify(_history)}`,
-      );
-
       let messages: any[] = [
         {
           role: "system",
@@ -101,9 +97,7 @@ export default function lowdeep() {
             role: "assistant",
             content: aiMsg?.content ?? "Wait, where is the AI message?",
           });
-          console.log(
-            `history after not having schema: ${JSON.stringify(_history)}`,
-          );
+
           return aiMsg?.content;
         }
 
@@ -113,9 +107,7 @@ export default function lowdeep() {
 
           if (result.success) {
             _history.push(aiMsg as ChatCompletionMessageParam);
-            console.log(
-              `history after success with a schema: ${JSON.stringify(_history)}`,
-            );
+
             return result.data;
           }
 
