@@ -4,6 +4,7 @@ import z from "zod";
 import type { ChatCompletionMessageParam } from "openai/resources";
 
 const getBaseURL = (provider: string) => {
+  if (provider === "deepinfra") return "https://api.deepinfra.com/v1/openai";
   return `https://api.${provider.toLowerCase()}.com/openai/v1`;
 };
 
