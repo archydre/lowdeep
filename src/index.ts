@@ -3,12 +3,21 @@ import type { FinalBuilder } from "./builder";
 import z from "zod";
 import type { ChatCompletionMessageParam } from "openai/resources";
 
-const getBaseURL = (provider: string) => {
+const getBaseURL = (provider: Provider) => {
   if (provider === "deepinfra") return "https://api.deepinfra.com/v1/openai";
+  if (provider === "groq") return "https://api.groq.com/openai/v1";
+
   return `https://api.${provider.toLowerCase()}.com/openai/v1`;
 };
 
 type Provider = "groq" | "deepinfra" | "openai";
+
+const inferProvider = (key: string) => {
+  if (key.startsWith("gsk_")) return "groq";
+  if (key.startsWith("sk_")) return "openai";
+
+  return "deepinfra";
+};
 
 export default function lowdeep() {
   let _key: string, _provider: string, _model: string;
@@ -25,9 +34,12 @@ export default function lowdeep() {
     },
     key(val: string) {
       _key = val;
+      const provider = inferProvider(val);
+      _provider = provider;
       return instance;
     },
     provider(val: Provider) {
+      // DEPRECATED
       _provider = val;
       return instance;
     },
@@ -57,7 +69,7 @@ export default function lowdeep() {
     async chat(message: string) {
       const client = new OpenAI({
         apiKey: _key,
-        baseURL: getBaseURL(_provider),
+        baseURL: getBaseURL(_provider as Provider),
       });
 
       _history.push({
