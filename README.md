@@ -75,6 +75,16 @@ const hero = await ai
 console.log(hero.name, hero.class, hero.stats.strength);
 ```
 
+If you store the builder in a variable and configure schema later, keep the typed return from `.schema(...)`:
+
+```typescript
+const ai = lowdeep().key("your_api_key").model("gpt-4o");
+const aiWithSchema = ai.system("Return strict JSON.").schema(CharacterSchema);
+
+const hero = await aiWithSchema.chat("Generate a random RPG character.");
+console.log(hero.name); // typed autocomplete
+```
+
 ---
 
 ## 🧠 Under the Hood

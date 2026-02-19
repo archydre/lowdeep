@@ -19,6 +19,117 @@ const inferProvider = (key: string) => {
   return "deepinfra";
 };
 
+const stripReasoningAndMarkdown = (content: string) => {
+  return content
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/```(?:json)?\s*([\s\S]*?)```/gi, "$1")
+    .trim();
+};
+
+const findBalancedJson = (text: string, fromIndex: number) => {
+  const startChar = text[fromIndex];
+  if (startChar !== "{" && startChar !== "[") return null;
+
+  const stack: string[] = [startChar];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = fromIndex + 1; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === "{" || ch === "[") {
+      stack.push(ch);
+      continue;
+    }
+
+    if (ch === "}" || ch === "]") {
+      const last = stack.at(-1);
+      const closesObject = ch === "}" && last === "{";
+      const closesArray = ch === "]" && last === "[";
+
+      if (!closesObject && !closesArray) return null;
+      stack.pop();
+      if (stack.length === 0) return text.slice(fromIndex, i + 1);
+    }
+  }
+
+  return null;
+};
+
+const parseJsonLoose = (content: string) => {
+  const cleaned = stripReasoningAndMarkdown(content);
+  if (!cleaned) throw new Error("Empty response.");
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Keep trying with extracted JSON blocks.
+  }
+
+  const parsedValues: unknown[] = [];
+  let i = 0;
+
+  while (i < cleaned.length) {
+    const nextObject = cleaned.indexOf("{", i);
+    const nextArray = cleaned.indexOf("[", i);
+    const starts = [nextObject, nextArray].filter((idx) => idx >= 0);
+    if (starts.length === 0) break;
+
+    const start = Math.min(...starts);
+    const block = findBalancedJson(cleaned, start);
+    if (!block) break;
+
+    parsedValues.push(JSON.parse(block));
+    i = start + block.length;
+  }
+
+  if (parsedValues.length === 0) {
+    throw new Error("No valid JSON found in the model response.");
+  }
+
+  if (parsedValues.length === 1) {
+    return parsedValues[0];
+  }
+
+  return parsedValues;
+};
+
+const getSchemaRootHint = (schema: z.ZodType | null) => {
+  if (!schema) return null;
+  const jsonSchema = schema.toJSONSchema() as { type?: string | string[] };
+  const schemaType = jsonSchema?.type;
+
+  if (schemaType === "array") {
+    return "square brackets []";
+  }
+
+  if (schemaType === "object") {
+    return "curly braces {}";
+  }
+
+  if (Array.isArray(schemaType) && schemaType.includes("array")) {
+    return "square brackets []";
+  }
+
+  return "the exact root type required by the JSON schema";
+};
+
 export default function lowdeep() {
   let _key: string, _provider: string, _model: string;
   let _system: string = "Be a helpful assistant";
@@ -77,6 +188,7 @@ export default function lowdeep() {
         content: message,
       });
 
+      const rootHint = getSchemaRootHint(_schema);
       let messages: any[] = [
         {
           role: "system",
@@ -85,7 +197,9 @@ export default function lowdeep() {
           ${
             _schema
               ? `
-              You MUST return a single valid JSON based on the schema below(strictly):
+              You MUST return only a single valid JSON payload (pure JSON, no markdown, no comments, no <think> tags).
+              The response root must use ${rootHint}.
+              Follow this schema strictly:
               ${JSON.stringify(_schema.toJSONSchema())}
             `
               : ""
@@ -96,6 +210,18 @@ export default function lowdeep() {
       ];
 
       for (let i = 0; i < _nRetry; i++) {
+        process.stdout.write("\r");
+
+        for (let j = 0; j < i; j++) {
+          process.stdout.write("🔴 ");
+        }
+
+        for (let j = 0; j < _nRetry - i; j++) {
+          process.stdout.write("⚪ ");
+        }
+
+        process.stdout.write(`[${i + 1}/${_nRetry}] trying....\n`);
+
         const response = await client.chat.completions.create({
           messages,
           model: _model,
@@ -114,7 +240,7 @@ export default function lowdeep() {
         }
 
         try {
-          const jsonRaw = JSON.parse(aiMsg?.content || "{}");
+          const jsonRaw = parseJsonLoose(aiMsg?.content || "");
           const result = _schema.safeParse(jsonRaw);
 
           if (result.success) {
@@ -123,29 +249,29 @@ export default function lowdeep() {
             return result.data;
           }
 
-          console.log(
-            `❌ Try ${i + 1}/${_nRetry} failed. Injecting error and trying again...`,
-          );
-
           const formattedError = z.treeifyError(result.error);
+          messages.push(aiMsg as ChatCompletionMessageParam);
           messages.push({
             role: "user",
             content: `Your last JSON response was invalid. 
                       Errors: ${JSON.stringify(formattedError)}. 
-                      Please fix the JSON and return only the corrected object.`,
+                      Please fix the JSON and return only the corrected JSON.`,
           });
-        } catch (error) {
-          messages.push(aiMsg);
+        } catch (error: any) {
+          if (aiMsg) messages.push(aiMsg);
           messages.push({
             role: "user",
-            content:
-              "You must return a valid JSON object. Do not include markdown blocks or text explanations.",
+            content: `Your last JSON response was invalid. 
+                      Errors: ${JSON.stringify(error.message)}. 
+                      Please fix the JSON and return only the corrected JSON.`,
           });
+
+          console.log(JSON.stringify(messages));
         }
       }
 
-      throw new Error(
-        "⚠️ Even with the retries, it was not possible to get a valid answer :(",
+      process.stdout.write(
+        "\n⚠️ Even with the retries, it was not possible to get a valid answer :(",
       );
     },
   };
