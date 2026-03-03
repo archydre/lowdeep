@@ -7,16 +7,20 @@ type State = {
   hasKey: boolean;
   // hasProvider: boolean;
   hasModel: boolean;
-  hasSchema: boolean;
+  hasOutputSchema: boolean;
+  hasInputSchema: boolean;
 };
 
 export type FinalBuilder<
   S extends State,
-  T extends z.ZodType = z.ZodAny,
+  Output extends z.ZodType = z.ZodAny,
+  Input extends z.ZodType = z.ZodAny,
 > = Compute<
   (S["hasKey"] extends false
     ? {
-        key(val: string): FinalBuilder<Omit<S, "hasKey"> & { hasKey: true }, T>;
+        key(
+          val: string,
+        ): FinalBuilder<Omit<S, "hasKey"> & { hasKey: true }, Output, Input>;
       }
     : {}) &
     /* (S["hasProvider"] extends false
@@ -30,7 +34,11 @@ export type FinalBuilder<
       ? {
           model(
             val: string,
-          ): FinalBuilder<Omit<S, "hasModel"> & { hasModel: true }, T>;
+          ): FinalBuilder<
+            Omit<S, "hasModel"> & { hasModel: true },
+            Output,
+            Input
+          >;
         }
       : {}) &
     (S["hasKey"] extends true
@@ -38,39 +46,28 @@ export type FinalBuilder<
         S["hasModel"] extends true
         ? {
             chat(
-              prompt: string,
-            ): Promise<S["hasSchema"] extends true ? z.infer<T> : string>;
-            schema<NewT extends ZodType>(
-              schema: NewT,
-            ): FinalBuilder<Omit<S, "hasSchema"> & { hasSchema: true }, NewT>;
-            retry(num: number): FinalBuilder<S, T>;
-            system(prompt: string): FinalBuilder<S, T>;
-            temperature(val: number): FinalBuilder<S, T>;
+              prompt: S["hasInputSchema"] extends true
+                ? z.infer<Input>
+                : string,
+            ): Promise<
+              S["hasOutputSchema"] extends true ? z.infer<Output> : string
+            >;
+            schema<NewOutput extends ZodType, NewInput extends ZodType>(
+              output: NewOutput,
+              input?: NewInput,
+            ): FinalBuilder<
+              Omit<S, "hasInputSchema" | "hasOutputSchema"> & {
+                hasOutputSchema: true;
+                hasInputSchema: NewInput extends z.ZodAny ? false : true;
+              },
+              NewOutput,
+              NewInput
+            >;
+            retry(num: number): FinalBuilder<S, Output, Input>;
+            system(prompt: string): FinalBuilder<S, Output, Input>;
+            temperature(val: number): FinalBuilder<S, Output, Input>;
           }
         : {}
       : {})
   // : {})
 >;
-
-type LowdeepBuilder<
-  S extends State,
-  T extends z.ZodType,
-> = (S["hasKey"] extends true
-  ? {}
-  : {
-      key(val: string): FinalBuilder<Omit<S, "hasKey"> & { hasKey: true }, T>;
-    }) &
-  /* (S["hasProvider"] extends true
-    ? {}
-    : {
-        provider(
-          val: string,
-        ): FinalBuilder<Omit<S, "hasProvider"> & { hasProvider: true }, T>;
-      }) & */
-  (S["hasModel"] extends true
-    ? {}
-    : {
-        model(
-          val: string,
-        ): FinalBuilder<Omit<S, "hasModel"> & { hasModel: true }, T>;
-      });

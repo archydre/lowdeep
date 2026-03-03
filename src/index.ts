@@ -134,6 +134,7 @@ export default function lowdeep() {
   let _key: string, _provider: string, _model: string;
   let _system: string = "Be a helpful assistant";
   let _schema: z.ZodType | null;
+  let _inputSchema: z.ZodType | null;
   let _nRetry: number = 3;
   let _temperature: number = 0.7;
   let _history: ChatCompletionMessageParam[] = [];
@@ -162,8 +163,13 @@ export default function lowdeep() {
       _nRetry = val;
       return instance;
     },
-    schema(s: z.ZodType) {
-      _schema = s;
+    schema(output: z.ZodType, input?: z.ZodType) {
+      _schema = output;
+
+      if (input) {
+        _inputSchema = input;
+      }
+
       return instance;
     },
     system(prompt: string) {
@@ -177,15 +183,29 @@ export default function lowdeep() {
       _temperature = val;
       return instance;
     },
-    async chat(message: string) {
+    async chat(data: any) {
       const client = new OpenAI({
         apiKey: _key,
         baseURL: getBaseURL(_provider as Provider),
       });
 
+      let promptContent: string;
+
+      if (_inputSchema) {
+        const parseResult = _inputSchema.safeParse(data);
+        if (!parseResult.success) {
+          throw new Error(
+            `Input validation failed: ${JSON.stringify(parseResult.error.format())}`,
+          );
+        }
+        promptContent = JSON.stringify(parseResult.data);
+      } else {
+        promptContent = typeof data === "string" ? data : JSON.stringify(data);
+      }
+
       _history.push({
         role: "user",
-        content: message,
+        content: promptContent,
       });
 
       const rootHint = getSchemaRootHint(_schema);
@@ -202,7 +222,12 @@ export default function lowdeep() {
               Follow this schema strictly:
               ${JSON.stringify(_schema.toJSONSchema())}
             `
-              : ""
+              : "" + _inputSchema
+                ? `
+                Expect the exact schema below and use it to follow the given instructions:
+                ${JSON.stringify(_inputSchema?.toJSONSchema())}
+              `
+                : ""
           }
           `,
         },
@@ -280,6 +305,7 @@ export default function lowdeep() {
     hasKey: false;
     hasProvider: false;
     hasModel: false;
-    hasSchema: false;
+    hasInputSchema: false;
+    hasOutputSchema: false;
   }>;
 }
