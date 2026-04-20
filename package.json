@@ -29,7 +29,9 @@
   },
   "scripts": {
     "build": "rm -rf dist && bun build ./src/index.ts --outdir ./dist --target node --external '*' && tsc",
-    "create-beta": "npm version prerelease --preid=beta"
+    "build:beta": "npm version prerelease --preid=beta",
+    "publish:stable": "npm publish",
+    "publish:beta": "npm publish --tag beta"
   },
   "author": "Zaqueu Nilton de Souza Paiva <zaqueunilton1@gmail.com>",
   "license": "MIT",
