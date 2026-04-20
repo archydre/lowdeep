@@ -234,6 +234,8 @@ export default function lowdeep() {
         ..._history,
       ];
 
+      console.log("trying with retries...");
+
       for (let i = 0; i < _nRetry; i++) {
         process.stdout.write("\r");
 
