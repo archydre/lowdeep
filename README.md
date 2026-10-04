@@ -243,6 +243,53 @@ const ai = lowdeep()
 const data = await ai.chat("Return status success");
 ```
 
+### Example 9: Request cancellation with `AbortController`
+
+Cancel long-running requests or retries when a user navigates away:
+
+```ts
+import lowdeep from "lowdeep";
+
+const ai = lowdeep()
+  .key(process.env.OPENAI_API_KEY!)
+  .model("gpt-4o");
+
+const controller = new AbortController();
+
+setTimeout(() => {
+  controller.abort();
+}, 2000);
+
+try {
+  const reply = await ai.chat("Generate an extensive essay", {
+    signal: controller.signal,
+    timeoutMs: 10000,
+  });
+} catch (err: any) {
+  if (err.name === "AbortError") {
+    console.log("Request successfully aborted!");
+  }
+}
+```
+
+### Example 10: Multi-agent branching with immutable builders
+
+Lowdeep builders are **100% immutable**. Create base configurations and derive specialized agents without side-effects or state pollution:
+
+```ts
+import lowdeep from "lowdeep";
+
+const base = lowdeep()
+  .key(process.env.OPENAI_API_KEY!)
+  .model("gpt-4o-mini");
+
+// Deriving two isolated agents
+const copywriter = base.system("You are an expert copywriter.");
+const reviewer = base.system("You are a strict code reviewer.");
+
+// copywriter and reviewer maintain completely separate histories and prompts
+```
+
 ## How the Builder Works
 
 Typical order:
@@ -302,6 +349,13 @@ Default: `3`.
 
 Enables or disables console logging during attempts. Disabled by default for clean production logs.
 
+### `.structuredOutputMode(mode: "auto" | "strict" | "prompt")`
+
+Controls how structured output is requested from the model:
+- `"auto"` (default): Uses native OpenAI-compatible `response_format: { type: "json_schema" }` and automatically falls back to prompt injection if the model does not support it.
+- `"strict"`: Enforces strict native `json_schema`.
+- `"prompt"`: Disables native `response_format` and uses pure system prompt guidance with Lowdeep's balanced JSON parser.
+
 ### `.onAttempt(cb: (attempt: number, maxRetries: number) => void)`
 
 Hook invoked at each chat attempt.
@@ -315,6 +369,10 @@ Hook invoked when a validation error occurs before initiating a self-healing ret
 - `outputSchema`: validates model response and returns typed object
 - `inputSchema`: validates `chat(data)` payload before provider request
 
+### `.clone()`
+
+Creates an isolated duplicate of the current builder instance with cloned conversation history.
+
 ### `.use(history: ChatCompletionMessageParam[])`
 
 Replaces current internal history with your own message array.
@@ -327,16 +385,19 @@ Returns a shallow copy of the current message history.
 
 Resets current message history to an empty array.
 
-### `.chat(data)`
+### `.chat(data, options?: CallOptions)`
 
-- If `inputSchema` exists, input is validated first.
-- If `outputSchema` is absent, returns model text.
-- If `outputSchema` exists, returns validated typed data.
+- `data`: prompt string or structured payload conforming to `inputSchema`.
+- `options`: optional `CallOptions` containing:
+  - `signal?: AbortSignal` (to cancel active request and retries)
+  - `timeoutMs?: number` (request timeout in milliseconds)
+  - `headers?: Record<string, string>` (custom HTTP headers)
+- Returns validated typed data when `outputSchema` is set, or raw string otherwise.
 - Throws `LowdeepMaxRetriesError` if retries are exhausted without a valid schema match.
 
-### `.chatStream(data)`
+### `.chatStream(data, options?: CallOptions)`
 
-Streams model text output token by token as an `AsyncGenerator<string, void, unknown>`.
+Streams model text output token by token as an `AsyncGenerator<string, void, unknown>`. Accepts optional `CallOptions` (`signal`, `timeoutMs`, `headers`).
 
 ### Legacy `.provider(...)`
 

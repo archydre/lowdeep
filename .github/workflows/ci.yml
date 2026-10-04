@@ -8,8 +8,11 @@ on:
 
 jobs:
   test:
-    name: Build & Test
-    runs-on: ubuntu-latest
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - name: Checkout code
@@ -23,8 +26,16 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Typecheck & Build
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Build Dual Package (ESM + CJS)
         run: bun run build
 
-      - name: Run Tests
+      - name: Verify Dual Package Imports with Node.js
+        run: |
+          node -e "import('./dist/index.js').then(m => console.log('ESM OK:', typeof m.default))"
+          node -e "const m = require('./dist/index.cjs'); console.log('CJS OK:', typeof m.default)"
+
+      - name: Run Test Suite
         run: bun test

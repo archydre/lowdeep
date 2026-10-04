@@ -1,7 +1,7 @@
 import type { ZodType } from "zod";
 import type z from "zod";
 import type { ChatCompletionMessageParam } from "openai/resources";
-import type { Provider } from "./types";
+import type { CallOptions, Provider, StructuredOutputMode } from "./types";
 
 export type Compute<T> = { [K in keyof T]: T[K] } & {};
 
@@ -49,6 +49,9 @@ export type LowdeepBuilder<
     /** Enable or disable terminal status outputs. Disabled by default. */
     verbose(enabled?: boolean): LowdeepBuilder<S, Output, Input>;
 
+    /** Choose structured output mode: 'auto' (native json_schema with fallback), 'strict', or 'prompt'. */
+    structuredOutputMode(mode: StructuredOutputMode): LowdeepBuilder<S, Output, Input>;
+
     /** Preload or override conversation history. */
     use(history: ChatCompletionMessageParam[]): LowdeepBuilder<S, Output, Input>;
 
@@ -73,6 +76,9 @@ export type LowdeepBuilder<
       NewInput
     >;
 
+    /** Create an isolated clone of the builder with independent history. */
+    clone(): LowdeepBuilder<S, Output, Input>;
+
     /** Retrieve a copy of the current message history. */
     getHistory(): ChatCompletionMessageParam[];
 
@@ -84,11 +90,13 @@ export type LowdeepBuilder<
           /** Send a chat completion message and return validated output. */
           chat(
             prompt: S["hasInputSchema"] extends true ? z.infer<Input> : string | unknown,
+            options?: CallOptions,
           ): Promise<S["hasOutputSchema"] extends true ? z.infer<Output> : string>;
 
           /** Stream the model's text response token by token. */
           chatStream(
             prompt: S["hasInputSchema"] extends true ? z.infer<Input> : string | unknown,
+            options?: CallOptions,
           ): Promise<AsyncGenerator<string, void, unknown>>;
         }
       : {}

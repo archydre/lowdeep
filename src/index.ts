@@ -1,7 +1,7 @@
 import z from "zod";
 import type { ChatCompletionMessageParam } from "openai/resources";
 import type { FinalBuilder, InitialState, LowdeepBuilder } from "./builder";
-import type { LowdeepOptions, Provider } from "./types";
+import type { CallOptions, LowdeepOptions, Provider, StructuredOutputMode } from "./types";
 import { getOpenAIClient, inferProvider } from "./client";
 import { getSchemaRootHint, parseJsonLoose } from "./parser";
 import {
@@ -15,99 +15,149 @@ export * from "./errors";
 export * from "./types";
 export type { FinalBuilder, LowdeepBuilder } from "./builder";
 
-function createBuilder<S extends {
-  hasKey: boolean;
-  hasModel: boolean;
-  hasOutputSchema: boolean;
-  hasInputSchema: boolean;
-}, Output extends z.ZodType = z.ZodAny, Input extends z.ZodType = z.ZodAny>(
-  options: LowdeepOptions = {},
-): LowdeepBuilder<S, Output, Input> {
+function createBuilder<
+  S extends {
+    hasKey: boolean;
+    hasModel: boolean;
+    hasOutputSchema: boolean;
+    hasInputSchema: boolean;
+  },
+  Output extends z.ZodType = z.ZodAny,
+  Input extends z.ZodType = z.ZodAny,
+>(options: LowdeepOptions = {}): LowdeepBuilder<S, Output, Input> {
   const _history: ChatCompletionMessageParam[] = options.history ? [...options.history] : [];
-  let _system: string = options.system ?? "Be a helpful assistant";
-  let _key: string | undefined = options.key;
-  let _provider: Provider | undefined = options.provider;
-  let _baseURL: string | undefined = options.baseURL;
-  let _model: string | undefined = options.model;
-  let _nRetry: number = options.retry ?? 3;
-  let _temperature: number = options.temperature ?? 0.7;
-  let _verbose: boolean = options.verbose ?? false;
-  let _schema: z.ZodType | null = options.outputSchema ?? null;
-  let _inputSchema: z.ZodType | null = options.inputSchema ?? null;
+  const _system: string = options.system ?? "Be a helpful assistant";
+  const _key: string | undefined = options.key;
+  const _provider: Provider | undefined = options.provider;
+  const _baseURL: string | undefined = options.baseURL;
+  const _model: string | undefined = options.model;
+  const _nRetry: number = options.retry ?? 3;
+  const _temperature: number = options.temperature ?? 0.7;
+  const _verbose: boolean = options.verbose ?? false;
+  const _structuredOutputMode: StructuredOutputMode = options.structuredOutputMode ?? "auto";
+  const _schema: z.ZodType | null = options.outputSchema ?? null;
+  const _inputSchema: z.ZodType | null = options.inputSchema ?? null;
   const _hooks = { ...options.hooks };
 
   const builder: any = {
     key(val: string) {
-      _key = val;
-      if (!_provider) {
-        _provider = inferProvider(val, _baseURL);
-      }
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        key: val,
+        provider: _provider ?? inferProvider(val, _baseURL),
+      });
     },
 
     model(val: string) {
-      _model = val;
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        model: val,
+      });
     },
 
     provider(val: Provider) {
-      _provider = val;
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        provider: val,
+      });
     },
 
     baseURL(url: string) {
-      _baseURL = url;
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        baseURL: url,
+      });
     },
 
     system(prompt: string) {
-      _system = prompt;
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        system: prompt,
+      });
     },
 
     temperature(val: number) {
       if (val > 2 || val < 0) {
         throw new LowdeepConfigurationError("Temperatures must be a value between 0 and 2.");
       }
-      _temperature = val;
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        temperature: val,
+      });
     },
 
     retry(val: number) {
       if (val < 1) {
         throw new LowdeepConfigurationError("Retry count must be at least 1.");
       }
-      _nRetry = val;
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        retry: val,
+      });
     },
 
     verbose(enabled: boolean = true) {
-      _verbose = enabled;
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        verbose: enabled,
+      });
+    },
+
+    structuredOutputMode(mode: StructuredOutputMode) {
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        structuredOutputMode: mode,
+      });
     },
 
     use(history: ChatCompletionMessageParam[]) {
       _history.length = 0;
       _history.push(...history);
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [...history],
+      });
     },
 
     onAttempt(cb: (attempt: number, maxRetries: number) => void) {
-      _hooks.onAttempt = cb;
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        hooks: { ..._hooks, onAttempt: cb },
+      });
     },
 
     onRetry(cb: (error: unknown, attempt: number, maxRetries: number) => void) {
-      _hooks.onRetry = cb;
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        hooks: { ..._hooks, onRetry: cb },
+      });
     },
 
     schema(output: z.ZodType, input?: z.ZodType) {
-      _schema = output;
-      if (input) {
-        _inputSchema = input;
-      }
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [..._history],
+        outputSchema: output,
+        inputSchema: input ?? _inputSchema,
+      });
+    },
+
+    clone() {
+      return createBuilder({
+        ...options,
+        history: [..._history],
+      });
     },
 
     getHistory() {
@@ -116,10 +166,13 @@ function createBuilder<S extends {
 
     clearHistory() {
       _history.length = 0;
-      return builder;
+      return createBuilder({
+        ...options,
+        history: [],
+      });
     },
 
-    async chat(data: any) {
+    async chat(data: any, callOptions?: CallOptions) {
       if (!_key || !_model) {
         throw new LowdeepConfigurationError(
           "Both API key and model must be specified before calling chat().",
@@ -182,8 +235,15 @@ ${JSON.stringify(_inputSchema.toJSONSchema())}
         userMessage,
       ];
 
+      const requestOptions = {
+        signal: callOptions?.signal,
+        headers: callOptions?.headers,
+        timeout: callOptions?.timeoutMs,
+      };
+
       let lastContent: string | null = null;
       let lastError: unknown = null;
+      let useNativeStructuredOutput = _structuredOutputMode !== "prompt" && _schema !== null;
 
       for (let attempt = 1; attempt <= _nRetry; attempt++) {
         _hooks.onAttempt?.(attempt, _nRetry);
@@ -192,11 +252,45 @@ ${JSON.stringify(_inputSchema.toJSONSchema())}
           process.stdout.write(`[lowdeep] Attempt ${attempt}/${_nRetry}...\n`);
         }
 
-        const response = await client.chat.completions.create({
-          messages,
-          model: _model,
-          temperature: _temperature,
-        });
+        let response: any;
+        try {
+          const completionParams: any = {
+            messages,
+            model: _model,
+            temperature: _temperature,
+          };
+
+          if (useNativeStructuredOutput && _schema) {
+            completionParams.response_format = {
+              type: "json_schema",
+              json_schema: {
+                name: "response_output",
+                strict: true,
+                schema: _schema.toJSONSchema(),
+              },
+            };
+          }
+
+          response = await client.chat.completions.create(completionParams, requestOptions);
+        } catch (apiError: any) {
+          // If native structured output failed and we are in auto mode, fallback to prompt-only
+          if (
+            useNativeStructuredOutput &&
+            _structuredOutputMode === "auto" &&
+            (apiError?.status === 400 || apiError?.message?.includes("response_format"))
+          ) {
+            useNativeStructuredOutput = false;
+            // Retry this attempt without response_format
+            const fallbackParams: any = {
+              messages,
+              model: _model,
+              temperature: _temperature,
+            };
+            response = await client.chat.completions.create(fallbackParams, requestOptions);
+          } else {
+            throw apiError;
+          }
+        }
 
         const aiMsg = response.choices[0]?.message;
         lastContent = aiMsg?.content ?? null;
@@ -262,7 +356,7 @@ Please fix the JSON and return only the corrected JSON.`,
       );
     },
 
-    async chatStream(data: any) {
+    async chatStream(data: any, callOptions?: CallOptions) {
       if (!_key || !_model) {
         throw new LowdeepConfigurationError(
           "Both API key and model must be specified before calling chatStream().",
@@ -304,12 +398,21 @@ Please fix the JSON and return only the corrected JSON.`,
         userMessage,
       ];
 
-      const stream = await client.chat.completions.create({
-        messages,
-        model: _model,
-        temperature: _temperature,
-        stream: true,
-      });
+      const requestOptions = {
+        signal: callOptions?.signal,
+        headers: callOptions?.headers,
+        timeout: callOptions?.timeoutMs,
+      };
+
+      const stream = await client.chat.completions.create(
+        {
+          messages,
+          model: _model,
+          temperature: _temperature,
+          stream: true,
+        },
+        requestOptions,
+      );
 
       async function* generateStream() {
         let accumulated = "";
