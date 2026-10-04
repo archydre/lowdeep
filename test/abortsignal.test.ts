@@ -76,4 +76,38 @@ describe("CallOptions and AbortSignal support", () => {
       setClientFactory(null);
     }
   });
+  it("does not pass undefined timeout or headers when callOptions is omitted", async () => {
+    let capturedOptions: any = "NOT_CALLED";
+
+    const mockOpenAIClient = {
+      chat: {
+        completions: {
+          create: async (_params: any, options?: any) => {
+            capturedOptions = options;
+            // Emulate OpenAI SDK validation
+            if (options && "timeout" in options) {
+              if (typeof options.timeout !== "number" || !Number.isInteger(options.timeout)) {
+                throw new Error("timeout must be an integer");
+              }
+            }
+            return {
+              choices: [{ message: { role: "assistant", content: "OK" } }],
+            };
+          },
+        },
+      },
+    };
+
+    setClientFactory(() => mockOpenAIClient as any);
+
+    try {
+      const ai = lowdeep().key("sk_test").model("gpt-4o-mini");
+      const res = await ai.chat("Hi");
+      expect(res).toBe("OK");
+      expect(capturedOptions?.timeout).toBeUndefined();
+      expect("timeout" in (capturedOptions || {})).toBe(false);
+    } finally {
+      setClientFactory(null);
+    }
+  });
 });

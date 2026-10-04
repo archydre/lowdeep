@@ -235,11 +235,10 @@ ${JSON.stringify(_inputSchema.toJSONSchema())}
         userMessage,
       ];
 
-      const requestOptions = {
-        signal: callOptions?.signal,
-        headers: callOptions?.headers,
-        timeout: callOptions?.timeoutMs,
-      };
+      const requestOptions: Record<string, any> = {};
+      if (callOptions?.signal) requestOptions.signal = callOptions.signal;
+      if (callOptions?.headers) requestOptions.headers = callOptions.headers;
+      if (callOptions?.timeoutMs !== undefined) requestOptions.timeout = callOptions.timeoutMs;
 
       let lastContent: string | null = null;
       let lastError: unknown = null;
@@ -398,11 +397,10 @@ Please fix the JSON and return only the corrected JSON.`,
         userMessage,
       ];
 
-      const requestOptions = {
-        signal: callOptions?.signal,
-        headers: callOptions?.headers,
-        timeout: callOptions?.timeoutMs,
-      };
+      const requestOptions: Record<string, any> = {};
+      if (callOptions?.signal) requestOptions.signal = callOptions.signal;
+      if (callOptions?.headers) requestOptions.headers = callOptions.headers;
+      if (callOptions?.timeoutMs !== undefined) requestOptions.timeout = callOptions.timeoutMs;
 
       const stream = await client.chat.completions.create(
         {
