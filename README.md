@@ -4,6 +4,7 @@ Fluent, resilient, type-safe AI SDK for OpenAI-compatible chat models.
 
 Lowdeep helps you move from free-form model output to validated TypeScript objects. It uses Zod for runtime validation and retries automatically when responses do not match your schema.
 
+[![CI](https://github.com/archydre/lowdeep/actions/workflows/ci.yml/badge.svg)](https://github.com/archydre/lowdeep/actions/workflows/ci.yml)
 [![Sponsor Lowdeep](https://img.shields.io/badge/Sponsor-Lowdeep-ff69b4?style=for-the-badge&logo=github-sponsors)](https://github.com/sponsors/archydre)
 
 ## Table of Contents
@@ -186,6 +187,62 @@ const ai = lowdeep()
 console.log(await ai.chat("What is the project codename?"));
 ```
 
+### Example 6: Streaming responses token-by-token
+
+Use `.chatStream(...)` for real-time text streaming in chat applications or CLI tools.
+
+```ts
+import lowdeep from "lowdeep";
+
+const ai = lowdeep()
+  .key(process.env.OPENAI_API_KEY!)
+  .model("gpt-4o-mini");
+
+const stream = await ai.chatStream("Write a haiku about clean code.");
+
+for await (const token of stream) {
+  process.stdout.write(token);
+}
+```
+
+### Example 7: Local models with Ollama or custom baseURL
+
+Connect to Ollama, vLLM, LocalAI, or corporate proxies with `.baseURL(...)`.
+
+```ts
+import lowdeep from "lowdeep";
+
+const ai = lowdeep()
+  .baseURL("http://localhost:11434/v1")
+  .key("ollama")
+  .model("llama3.2");
+
+const reply = await ai.chat("Hello from local Ollama!");
+console.log(reply);
+```
+
+### Example 8: Lifecycle hooks & telemetry
+
+Track attempts and catch self-healing retries in production logging.
+
+```ts
+import lowdeep from "lowdeep";
+import { z } from "zod";
+
+const ai = lowdeep()
+  .key(process.env.GROQ_API_KEY!)
+  .model("llama-3.3-70b-versatile")
+  .schema(z.object({ status: z.literal("success") }))
+  .onAttempt((attempt, max) => {
+    console.log(`[Attempt ${attempt}/${max}]`);
+  })
+  .onRetry((error, attempt, max) => {
+    console.warn(`[Retry ${attempt}/${max}] Schema failed, requesting healing:`, error);
+  });
+
+const data = await ai.chat("Return status success");
+```
+
 ## How the Builder Works
 
 Typical order:
@@ -213,12 +270,18 @@ Creates a new builder instance.
 Sets API key and infers provider from key prefix:
 
 - `gsk_` -> `groq`
-- `sk_` -> `openai`
-- any other prefix -> `deepinfra`
+- `sk-or-` -> `openrouter`
+- `sk_` or `sk-proj-` -> `openai`
+- `together_` -> `together`
+- any other prefix -> `deepinfra` (or `ollama` if localhost)
 
 ### `.model(value: string)`
 
 Sets model id passed to the provider.
+
+### `.baseURL(url: string)`
+
+Sets a custom OpenAI-compatible endpoint URL (e.g. for Ollama `http://localhost:11434/v1`, vLLM, or corporate proxies).
 
 ### `.system(prompt: string)`
 
@@ -227,13 +290,25 @@ Sets system instruction. Default: `"Be a helpful assistant"`.
 ### `.temperature(value: number)`
 
 Sets temperature from `0` to `2`.
-Throws for values outside this range.
+Throws `LowdeepConfigurationError` for values outside this range.
 Default: `0.7`.
 
 ### `.retry(value: number)`
 
 Sets max retry attempts for the self-healing loop.
 Default: `3`.
+
+### `.verbose(enabled?: boolean)`
+
+Enables or disables console logging during attempts. Disabled by default for clean production logs.
+
+### `.onAttempt(cb: (attempt: number, maxRetries: number) => void)`
+
+Hook invoked at each chat attempt.
+
+### `.onRetry(cb: (error: unknown, attempt: number, maxRetries: number) => void)`
+
+Hook invoked when a validation error occurs before initiating a self-healing retry.
 
 ### `.schema(outputSchema: ZodType, inputSchema?: ZodType)`
 
@@ -244,15 +319,28 @@ Default: `3`.
 
 Replaces current internal history with your own message array.
 
+### `.getHistory()`
+
+Returns a shallow copy of the current message history.
+
+### `.clearHistory()`
+
+Resets current message history to an empty array.
+
 ### `.chat(data)`
 
 - If `inputSchema` exists, input is validated first.
 - If `outputSchema` is absent, returns model text.
 - If `outputSchema` exists, returns validated typed data.
+- Throws `LowdeepMaxRetriesError` if retries are exhausted without a valid schema match.
+
+### `.chatStream(data)`
+
+Streams model text output token by token as an `AsyncGenerator<string, void, unknown>`.
 
 ### Legacy `.provider(...)`
 
-A runtime `provider("groq" | "openai" | "deepinfra")` method exists for compatibility, but key-based provider inference is the intended approach.
+A runtime `provider("groq" | "openai" | "deepinfra" | ...)` method exists for compatibility, but key-based provider inference or explicit `baseURL` is the recommended approach.
 
 ## Self-Healing JSON Flow
 
@@ -260,48 +348,70 @@ When output schema is configured, Lowdeep:
 
 1. Injects JSON schema guidance in the system message.
 2. Requests strict JSON output.
-3. Cleans model output (including fenced JSON or reasoning tags).
+3. Cleans model output (including fenced JSON or reasoning `<think>` tags).
 4. Parses and validates with Zod.
-5. On failure, appends validation errors and retries.
+5. On failure, appends validation errors and triggers `onRetry` hook.
+6. Automatically requests correction from the model in an atomic retry loop.
 
-If all retries fail, Lowdeep prints a warning and returns `undefined`.
+If all retries fail, Lowdeep throws a `LowdeepMaxRetriesError` containing the attempt count, the last raw response, and the underlying validation errors.
 
 ## Provider Behavior
 
-Supported providers:
+Supported providers (auto-inferred or configured via `baseURL`):
 
 - OpenAI
 - Groq
 - DeepInfra
+- OpenRouter
+- Together AI
+- Ollama / vLLM / LocalAI (via `.baseURL("http://localhost:11434/v1")`)
 
-All requests are sent through OpenAI-compatible chat completions.
+All requests are sent through OpenAI-compatible chat completions with HTTP connection pooling.
 
 ## Error Handling
 
-Common failures:
+Lowdeep exports custom error classes:
 
-- Provider rejects key/model
-- Temperature out of range (`< 0` or `> 2`)
-- Input schema validation failure
-- Output schema still invalid after all retries
+- `LowdeepError`: Base error class.
+- `LowdeepConfigurationError`: Thrown for invalid configurations (e.g. temperature out of range, missing key/model).
+- `LowdeepValidationError`: Thrown when input data violates `inputSchema`.
+- `LowdeepMaxRetriesError`: Thrown when all self-healing attempts fail.
 
 Recommended pattern:
 
 ```ts
+import lowdeep, {
+  LowdeepConfigurationError,
+  LowdeepMaxRetriesError,
+  LowdeepValidationError,
+} from "lowdeep";
+
 try {
   const result = await ai.chat("Return JSON with title and score");
   console.log(result);
 } catch (error) {
-  console.error("Lowdeep request failed:", error);
+  if (error instanceof LowdeepValidationError) {
+    console.error("Input validation failed:", error.issues);
+  } else if (error instanceof LowdeepMaxRetriesError) {
+    console.error(`Failed after ${error.attempts} attempts. Last response:`, error.lastResponseContent);
+  } else {
+    console.error("Lowdeep request failed:", error);
+  }
 }
 ```
 
 ## Development
-
+ 
 Build the package:
-
+ 
 ```bash
 bun run build
+```
+
+Run test suite:
+
+```bash
+bun test
 ```
 
 Build output is generated in `dist/`.

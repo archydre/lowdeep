@@ -29,6 +29,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && bun build ./src/index.ts --outdir ./dist --target node --external '*' && tsc",
+    "test": "bun test",
     "build:beta": "npm version prerelease --preid=beta",
     "publish:stable": "npm publish",
     "publish:beta": "npm publish --tag beta"

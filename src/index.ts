@@ -1,192 +1,135 @@
-import OpenAI from "openai";
-import type { FinalBuilder } from "./builder";
 import z from "zod";
 import type { ChatCompletionMessageParam } from "openai/resources";
+import type { FinalBuilder, InitialState, LowdeepBuilder } from "./builder";
+import type { LowdeepOptions, Provider } from "./types";
+import { getOpenAIClient, inferProvider } from "./client";
+import { getSchemaRootHint, parseJsonLoose } from "./parser";
+import {
+  LowdeepConfigurationError,
+  LowdeepError,
+  LowdeepMaxRetriesError,
+  LowdeepValidationError,
+} from "./errors";
 
-const getBaseURL = (provider: Provider) => {
-  if (provider === "deepinfra") return "https://api.deepinfra.com/v1/openai";
-  if (provider === "groq") return "https://api.groq.com/openai/v1";
+export * from "./errors";
+export * from "./types";
+export type { FinalBuilder, LowdeepBuilder } from "./builder";
 
-  return `https://api.${provider.toLowerCase()}.com/openai/v1`;
-};
+function createBuilder<S extends {
+  hasKey: boolean;
+  hasModel: boolean;
+  hasOutputSchema: boolean;
+  hasInputSchema: boolean;
+}, Output extends z.ZodType = z.ZodAny, Input extends z.ZodType = z.ZodAny>(
+  options: LowdeepOptions = {},
+): LowdeepBuilder<S, Output, Input> {
+  const _history: ChatCompletionMessageParam[] = options.history ? [...options.history] : [];
+  let _system: string = options.system ?? "Be a helpful assistant";
+  let _key: string | undefined = options.key;
+  let _provider: Provider | undefined = options.provider;
+  let _baseURL: string | undefined = options.baseURL;
+  let _model: string | undefined = options.model;
+  let _nRetry: number = options.retry ?? 3;
+  let _temperature: number = options.temperature ?? 0.7;
+  let _verbose: boolean = options.verbose ?? false;
+  let _schema: z.ZodType | null = options.outputSchema ?? null;
+  let _inputSchema: z.ZodType | null = options.inputSchema ?? null;
+  const _hooks = { ...options.hooks };
 
-type Provider = "groq" | "deepinfra" | "openai";
-
-const inferProvider = (key: string) => {
-  if (key.startsWith("gsk_")) return "groq";
-  if (key.startsWith("sk_")) return "openai";
-
-  return "deepinfra";
-};
-
-const stripReasoningAndMarkdown = (content: string) => {
-  return content
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/```(?:json)?\s*([\s\S]*?)```/gi, "$1")
-    .trim();
-};
-
-const findBalancedJson = (text: string, fromIndex: number) => {
-  const startChar = text[fromIndex];
-  if (startChar !== "{" && startChar !== "[") return null;
-
-  const stack: string[] = [startChar];
-  let inString = false;
-  let escaped = false;
-
-  for (let i = fromIndex + 1; i < text.length; i++) {
-    const ch = text[i];
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-
-    if (ch === "{" || ch === "[") {
-      stack.push(ch);
-      continue;
-    }
-
-    if (ch === "}" || ch === "]") {
-      const last = stack.at(-1);
-      const closesObject = ch === "}" && last === "{";
-      const closesArray = ch === "]" && last === "[";
-
-      if (!closesObject && !closesArray) return null;
-      stack.pop();
-      if (stack.length === 0) return text.slice(fromIndex, i + 1);
-    }
-  }
-
-  return null;
-};
-
-const parseJsonLoose = (content: string) => {
-  const cleaned = stripReasoningAndMarkdown(content);
-  if (!cleaned) throw new Error("Empty response.");
-
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    // Keep trying with extracted JSON blocks.
-  }
-
-  const parsedValues: unknown[] = [];
-  let i = 0;
-
-  while (i < cleaned.length) {
-    const nextObject = cleaned.indexOf("{", i);
-    const nextArray = cleaned.indexOf("[", i);
-    const starts = [nextObject, nextArray].filter((idx) => idx >= 0);
-    if (starts.length === 0) break;
-
-    const start = Math.min(...starts);
-    const block = findBalancedJson(cleaned, start);
-    if (!block) break;
-
-    parsedValues.push(JSON.parse(block));
-    i = start + block.length;
-  }
-
-  if (parsedValues.length === 0) {
-    throw new Error("No valid JSON found in the model response.");
-  }
-
-  if (parsedValues.length === 1) {
-    return parsedValues[0];
-  }
-
-  return parsedValues;
-};
-
-const getSchemaRootHint = (schema: z.ZodType | null) => {
-  if (!schema) return null;
-  const jsonSchema = schema.toJSONSchema() as { type?: string | string[] };
-  const schemaType = jsonSchema?.type;
-
-  if (schemaType === "array") {
-    return "square brackets []";
-  }
-
-  if (schemaType === "object") {
-    return "curly braces {}";
-  }
-
-  if (Array.isArray(schemaType) && schemaType.includes("array")) {
-    return "square brackets []";
-  }
-
-  return "the exact root type required by the JSON schema";
-};
-
-export default function lowdeep() {
-  let _key: string, _provider: string, _model: string;
-  let _system: string = "Be a helpful assistant";
-  let _schema: z.ZodType | null;
-  let _inputSchema: z.ZodType | null;
-  let _nRetry: number = 3;
-  let _temperature: number = 0.7;
-  let _history: ChatCompletionMessageParam[] = [];
-
-  const instance = {
-    use(history: ChatCompletionMessageParam[]) {
-      _history = history;
-      return instance;
-    },
+  const builder: any = {
     key(val: string) {
       _key = val;
-      const provider = inferProvider(val);
-      _provider = provider;
-      return instance;
+      if (!_provider) {
+        _provider = inferProvider(val, _baseURL);
+      }
+      return builder;
     },
-    provider(val: Provider) {
-      // DEPRECATED
-      _provider = val;
-      return instance;
-    },
+
     model(val: string) {
       _model = val;
-      return instance;
+      return builder;
     },
+
+    provider(val: Provider) {
+      _provider = val;
+      return builder;
+    },
+
+    baseURL(url: string) {
+      _baseURL = url;
+      return builder;
+    },
+
+    system(prompt: string) {
+      _system = prompt;
+      return builder;
+    },
+
+    temperature(val: number) {
+      if (val > 2 || val < 0) {
+        throw new LowdeepConfigurationError("Temperatures must be a value between 0 and 2.");
+      }
+      _temperature = val;
+      return builder;
+    },
+
     retry(val: number) {
+      if (val < 1) {
+        throw new LowdeepConfigurationError("Retry count must be at least 1.");
+      }
       _nRetry = val;
-      return instance;
+      return builder;
     },
+
+    verbose(enabled: boolean = true) {
+      _verbose = enabled;
+      return builder;
+    },
+
+    use(history: ChatCompletionMessageParam[]) {
+      _history.length = 0;
+      _history.push(...history);
+      return builder;
+    },
+
+    onAttempt(cb: (attempt: number, maxRetries: number) => void) {
+      _hooks.onAttempt = cb;
+      return builder;
+    },
+
+    onRetry(cb: (error: unknown, attempt: number, maxRetries: number) => void) {
+      _hooks.onRetry = cb;
+      return builder;
+    },
+
     schema(output: z.ZodType, input?: z.ZodType) {
       _schema = output;
-
       if (input) {
         _inputSchema = input;
       }
+      return builder;
+    },
 
-      return instance;
+    getHistory() {
+      return [..._history];
     },
-    system(prompt: string) {
-      _system = prompt;
-      return instance;
+
+    clearHistory() {
+      _history.length = 0;
+      return builder;
     },
-    temperature(val: number) {
-      if (val > 2 || val < 0) {
-        throw Error("Temperatures must be a value between 0 and 2.");
-      }
-      _temperature = val;
-      return instance;
-    },
+
     async chat(data: any) {
-      const client = new OpenAI({
-        apiKey: _key,
-        baseURL: getBaseURL(_provider as Provider),
+      if (!_key || !_model) {
+        throw new LowdeepConfigurationError(
+          "Both API key and model must be specified before calling chat().",
+        );
+      }
+
+      const client = getOpenAIClient({
+        key: _key,
+        provider: _provider,
+        baseURL: _baseURL,
       });
 
       let promptContent: string;
@@ -194,8 +137,10 @@ export default function lowdeep() {
       if (_inputSchema) {
         const parseResult = _inputSchema.safeParse(data);
         if (!parseResult.success) {
-          throw new Error(
-            `Input validation failed: ${JSON.stringify(parseResult.error.format())}`,
+          const formatted = z.treeifyError(parseResult.error);
+          throw new LowdeepValidationError(
+            `Input validation failed: ${JSON.stringify(formatted)}`,
+            parseResult.error,
           );
         }
         promptContent = JSON.stringify(parseResult.data);
@@ -203,67 +148,67 @@ export default function lowdeep() {
         promptContent = typeof data === "string" ? data : JSON.stringify(data);
       }
 
-      _history.push({
+      const userMessage: ChatCompletionMessageParam = {
         role: "user",
         content: promptContent,
-      });
+      };
 
       const rootHint = getSchemaRootHint(_schema);
-      let messages: any[] = [
+      const systemContent = `
+${_system}
+${
+  _schema
+    ? `
+You MUST return only a single valid JSON payload (pure JSON, no markdown, no comments, no <think> tags).
+The response root must use ${rootHint}.
+Follow this schema strictly:
+${JSON.stringify(_schema.toJSONSchema())}
+`
+    : _inputSchema
+      ? `
+Expect the exact schema below and use it to follow the given instructions:
+${JSON.stringify(_inputSchema.toJSONSchema())}
+`
+      : ""
+}
+`.trim();
+
+      const messages: ChatCompletionMessageParam[] = [
         {
           role: "system",
-          content: `
-          ${_system}
-          ${
-            _schema
-              ? `
-              You MUST return only a single valid JSON payload (pure JSON, no markdown, no comments, no <think> tags).
-              The response root must use ${rootHint}.
-              Follow this schema strictly:
-              ${JSON.stringify(_schema.toJSONSchema())}
-            `
-              : "" + _inputSchema
-                ? `
-                Expect the exact schema below and use it to follow the given instructions:
-                ${JSON.stringify(_inputSchema?.toJSONSchema())}
-              `
-                : ""
-          }
-          `,
+          content: systemContent,
         },
         ..._history,
+        userMessage,
       ];
 
-      console.log("trying with retries...");
+      let lastContent: string | null = null;
+      let lastError: unknown = null;
 
-      for (let i = 0; i < _nRetry; i++) {
-        process.stdout.write("\r");
+      for (let attempt = 1; attempt <= _nRetry; attempt++) {
+        _hooks.onAttempt?.(attempt, _nRetry);
 
-        for (let j = 0; j < i; j++) {
-          process.stdout.write("🔴 ");
+        if (_verbose && typeof process !== "undefined" && process.stdout?.write) {
+          process.stdout.write(`[lowdeep] Attempt ${attempt}/${_nRetry}...\n`);
         }
-
-        for (let j = 0; j < _nRetry - i; j++) {
-          process.stdout.write("⚪ ");
-        }
-
-        process.stdout.write(`[${i + 1}/${_nRetry}] trying....\n`);
 
         const response = await client.chat.completions.create({
           messages,
           model: _model,
           temperature: _temperature,
-          // response_format: _schema ? { type: "json_object" } : undefined,
         });
 
         const aiMsg = response.choices[0]?.message;
+        lastContent = aiMsg?.content ?? null;
+
         if (!_schema) {
+          _history.push(userMessage);
           _history.push({
             role: "assistant",
-            content: aiMsg?.content ?? "Wait, where is the AI message?",
+            content: aiMsg?.content ?? "",
           });
 
-          return aiMsg?.content;
+          return aiMsg?.content ?? "";
         }
 
         try {
@@ -271,43 +216,126 @@ export default function lowdeep() {
           const result = _schema.safeParse(jsonRaw);
 
           if (result.success) {
-            _history.push(aiMsg as ChatCompletionMessageParam);
+            _history.push(userMessage);
+            _history.push({
+              role: "assistant",
+              content: aiMsg?.content ?? JSON.stringify(result.data),
+            });
 
             return result.data;
           }
 
+          lastError = result.error;
           const formattedError = z.treeifyError(result.error);
-          messages.push(aiMsg as ChatCompletionMessageParam);
+          _hooks.onRetry?.(result.error, attempt, _nRetry);
+
+          if (aiMsg) {
+            messages.push(aiMsg as ChatCompletionMessageParam);
+          }
           messages.push({
             role: "user",
-            content: `Your last JSON response was invalid. 
-                      Errors: ${JSON.stringify(formattedError)}. 
-                      Please fix the JSON and return only the corrected JSON.`,
+            content: `Your last JSON response was invalid.
+Errors: ${JSON.stringify(formattedError)}.
+Please fix the JSON and return only the corrected JSON.`,
           });
         } catch (error: any) {
-          if (aiMsg) messages.push(aiMsg);
+          lastError = error;
+          _hooks.onRetry?.(error, attempt, _nRetry);
+
+          if (aiMsg) {
+            messages.push(aiMsg as ChatCompletionMessageParam);
+          }
           messages.push({
             role: "user",
-            content: `Your last JSON response was invalid. 
-                      Errors: ${JSON.stringify(error.message)}. 
-                      Please fix the JSON and return only the corrected JSON.`,
+            content: `Your last JSON response was invalid.
+Errors: ${JSON.stringify(error.message ?? error)}.
+Please fix the JSON and return only the corrected JSON.`,
           });
-
-          console.log(JSON.stringify(messages));
         }
       }
 
-      process.stdout.write(
-        "\n⚠️ Even with the retries, it was not possible to get a valid answer :(",
+      throw new LowdeepMaxRetriesError(
+        `Failed to obtain a valid response after ${_nRetry} attempts.`,
+        _nRetry,
+        lastContent,
+        lastError,
       );
+    },
+
+    async chatStream(data: any) {
+      if (!_key || !_model) {
+        throw new LowdeepConfigurationError(
+          "Both API key and model must be specified before calling chatStream().",
+        );
+      }
+
+      const client = getOpenAIClient({
+        key: _key,
+        provider: _provider,
+        baseURL: _baseURL,
+      });
+
+      let promptContent: string;
+      if (_inputSchema) {
+        const parseResult = _inputSchema.safeParse(data);
+        if (!parseResult.success) {
+          const formatted = z.treeifyError(parseResult.error);
+          throw new LowdeepValidationError(
+            `Input validation failed: ${JSON.stringify(formatted)}`,
+            parseResult.error,
+          );
+        }
+        promptContent = JSON.stringify(parseResult.data);
+      } else {
+        promptContent = typeof data === "string" ? data : JSON.stringify(data);
+      }
+
+      const userMessage: ChatCompletionMessageParam = {
+        role: "user",
+        content: promptContent,
+      };
+
+      const messages: ChatCompletionMessageParam[] = [
+        {
+          role: "system",
+          content: _system,
+        },
+        ..._history,
+        userMessage,
+      ];
+
+      const stream = await client.chat.completions.create({
+        messages,
+        model: _model,
+        temperature: _temperature,
+        stream: true,
+      });
+
+      async function* generateStream() {
+        let accumulated = "";
+        for await (const chunk of stream) {
+          const token = chunk.choices[0]?.delta?.content || "";
+          if (token) {
+            accumulated += token;
+            yield token;
+          }
+        }
+        _history.push(userMessage);
+        _history.push({
+          role: "assistant",
+          content: accumulated,
+        });
+      }
+
+      return generateStream();
     },
   };
 
-  return instance as FinalBuilder<{
-    hasKey: false;
-    hasProvider: false;
-    hasModel: false;
-    hasInputSchema: false;
-    hasOutputSchema: false;
-  }>;
+  return builder as LowdeepBuilder<S, Output, Input>;
 }
+
+export default function lowdeep(options?: LowdeepOptions): FinalBuilder<InitialState> {
+  return createBuilder<InitialState>(options);
+}
+
+export { lowdeep };
